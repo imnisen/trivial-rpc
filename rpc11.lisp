@@ -1,4 +1,4 @@
-(ql:quickload '(:usocket :bordeaux-threads :flexi-streams))
+;; (ql:quickload '(:pzmq :bordeaux-threads))
 
 (defmacro p-r (x)
   (let ((g (gensym)))
@@ -59,114 +59,79 @@
 (defclass transport-serialized (transport) ())
 
 (defmethod send-packet :around ((transport transport-serialized)
-                                packet
-                                &key)
+                                packet &key)
   (format t "~a enter send-packet :around ~&" (tag transport))
   (format t "packet is : ~a ~&" packet)
   (call-next-method transport
                     (write-to-string packet
                                      :array t :base 10 :case :downcase :circle t
                                      :escape t :gensym t :length nil :level nil
-                                     :lines nil :pretty nil :radix nil :readably nil))
-  )
+                                     :lines nil :pretty nil :radix nil :readably nil)))
 
 (defmethod recv-packet :around ((transport transport-serialized) &key)
   (format t "~a enter recv-packet :around ~&" (tag transport))
-  (first (multiple-value-list (read-from-string (call-next-method))))
-  )
+  (first (multiple-value-list (read-from-string (call-next-method)))))
 
 
 
 
-(defclass transport-udp (transport-serialized)
-  ((host :reader :host
-         :initarg :host
-         :initform (error "No host given"))
-   (port :reader :port
-         :initarg :port
-         :initform (error "No port given"))
+(defclass transport-zeromq (transport-serialized)
+  ((url :reader transport-zeromq-url
+        :initarg :url
+        :initform (error "No ZeroMQ URL given"))
+   (context :initform (pzmq:ctx-new))
    (socket :initform nil)
    (tag :initarg :tag
         :reader tag)))
 
-(defclass transport-udp-server (transport-server transport-udp) ())
-(defclass transport-udp-client (transport-client transport-udp) ())
+(defclass transport-client-zeromq (transport-client transport-zeromq) ())
+(defclass transport-server-zeromq (transport-server transport-zeromq) ())
 
 
-
-(defmethod initialize-instance :after ((transport transport-udp-server)
+(defmethod initialize-instance :after ((transport transport-client-zeromq)
                                        &key)
-  (with-slots (socket host port) transport
-    (setf socket (usocket:socket-connect nil nil
-                                         :protocol :datagram
-                                         :local-host host
-                                         :local-port port))))
+  (with-slots (context socket url) transport
+    (setf socket (pzmq:socket context :req))
+    (pzmq:connect socket url)))
 
-(defmethod initialize-instance :after ((transport transport-udp-client)
+(defmethod initialize-instance :after ((transport transport-server-zeromq)
                                        &key)
-  (with-slots (socket host port) transport
-    (setf socket (usocket:socket-connect "127.0.0.1" port
-                                         :protocol :datagram))))
+  (with-slots (context socket url) transport
+    (setf socket (pzmq:socket context :rep))
+    (pzmq:bind socket url)))
 
 ;;  (abort nil)
-(defmethod transport-close ((transport transport-udp) &key)
-  (with-slots (socket) transport
-    (usocket:socket-close socket)))
+(defmethod transport-close ((transport transport-zeromq) &key)
+  (with-slots (context socket) transport
+    (when socket (pzmq:close socket))
+    (pzmq:ctx-term context)))
 
 
-;; (defmethod send-packet ((transport transport-udp-server) packet host port &key)
-;;   (let ((buffer  (flexi-streams:string-to-octets packet :external-format :utf-8)))
-;;     (format t "~a sending data ~&" (tag transport))
-;;     (usocket:socket-send
-;;      (slot-value transport 'socket)
-;;      buffer
-;;      (length buffer)
-;;      :host host
-;;      :port port))
-;;   )
+(defmethod send-packet ((transport transport-zeromq) packet &key)
+  (format t "~a sending data ~&" (tag transport))
+  (pzmq:send (slot-value transport 'socket) packet))
 
-;; (defmethod send-packet ((transport transport-udp-client) packet host port &key)
-;;   (declare (ignore host port))
-;;   (let ((buffer  (flexi-streams:string-to-octets packet :external-format :utf-8)))
-;;     (format t "~a sending data ~&" (tag transport))
-;;     (usocket:socket-send (slot-value transport 'socket) buffer (length buffer)))
-;;   )
-
-
-(defmethod send-packet ((transport transport-udp) packet &key)
-  (let ((buffer  (flexi-streams:string-to-octets packet :external-format :utf-8)))
-    (format t "~a sending data ~&" (tag transport))
-    (usocket:socket-send (slot-value transport 'socket) buffer (length buffer)))
-  )
-
-
-
-(defvar data-max-length 65507)
-(defmethod recv-packet ((transport transport-udp) &key)
+(defmethod recv-packet ((transport transport-zeromq) &key)
   (let ((msg))
     (format t "~a recving data ~&" (tag transport))
-    (multiple-value-bind (return-buffer return-length)
-        (usocket:socket-receive (slot-value transport 'socket) nil data-max-length)
-      (setf msg (flexi-streams:octets-to-string (subseq return-buffer 0 return-length) :external-format :utf-8))
-      ;; (list msg remote-host remote-port)
-      msg
-      )))
+    (setf msg (pzmq:recv-string (slot-value transport 'socket)))
+    (format t "~a have recved data: ~a ~&" (tag transport) msg)
+    msg))
 
 
 
-(defmethod run-rpc-server ((transport transport-udp-server) object &key)
+(defmethod run-rpc-server ((transport transport-server) object &key)
   (loop for request = (recv-packet transport) do
         (if (eql (car request) :shutdown)
-            (return (send-packet transport nil ))
+            (return (send-packet transport nil))
             (progn
               (format t "Loop once, trying to send packet from server~&")
               (send-packet transport
                            (handler-case
                                (apply (car request) object (cdr request))
-                             (condition (c) c))
-                           )))))
+                             (condition (c) c)))))))
 
-(defmethod start-rpc-server ((transport transport-udp-server) object &key)
+(defmethod start-rpc-server ((transport transport-server-zeromq) object &key)
   (bt:make-thread #'(lambda () (run-rpc-server transport object))
                   :name (format nil "RPC/Zeromq Server for ~S" object)))
 

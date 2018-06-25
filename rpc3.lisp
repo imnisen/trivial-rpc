@@ -1,23 +1,60 @@
 (setf fs (make-instance 'file-server :filename "test.txt"))
 
+
 (setf tps (make-instance 'transport-server-zeromq
-                         :url "tcp://127.0.0.1:5557"
+                         :url "tcp://127.0.0.1:7002"
                          :tag :server))
-
-(setf tpc (make-instance 'transport-client-zeromq
-                         :url "tcp://127.0.0.1:5557"
-                         :tag :client))
-
-(setf stub (make-instance 'fs-stub :transport tpc))
 
 
 (start-rpc-server tps fs)
+
+
+
+
+(setf tpc (make-instance 'transport-client-zeromq
+                         :url "tcp://127.0.0.1:7002"
+                         :tag :client))
+(setf stub (make-instance 'fs-stub :transport tpc))
 
 (setf temp (read-file stub 4))
 
 (funcall temp)
 
 
+
+
+
+;; loggic
+;; (define-rpc-class server () ())
+
+(defclass server () ())
+(defmethod my-sum ((s server) a b)
+  (+ a b))
+
+;; server
+(setf my-server (make-instance 'server))
+(setf my-tps (make-instance 'transport-udp-server
+                            :host "127.0.0.1"
+                            :port 9555
+                            :tag :server))
+(start-rpc-server my-tps my-server)
+
+
+;; client
+(setf my-tpc (make-instance 'transport-udp-client
+                            :host "127.0.0.1"
+                            :port 9555
+                            :tag :client))
+(setf my-stub (make-instance 'stub :transport my-tpc))
+
+(setf temp (call my-stub 'my-sum 4 3))
+
+(funcall temp)
+
+
+
+
+
 ;; Now we can test our asynchronous RPC framework based on threads, for the first we initialize all required objects:
 
 ;; CL-USER> (setf fs (make-instance 'file-server :filename "test.txt"))
