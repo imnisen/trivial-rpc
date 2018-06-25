@@ -1,29 +1,3 @@
-(setf fs (make-instance 'file-server :filename "test.txt"))
-
-
-(setf tps (make-instance 'transport-server-zeromq
-                         :url "tcp://127.0.0.1:7002"
-                         :tag :server))
-
-
-(start-rpc-server tps fs)
-
-
-
-
-(setf tpc (make-instance 'transport-client-zeromq
-                         :url "tcp://127.0.0.1:7002"
-                         :tag :client))
-(setf stub (make-instance 'fs-stub :transport tpc))
-
-(setf temp (read-file stub 4))
-
-(funcall temp)
-
-
-
-
-
 ;; loggic
 ;; (define-rpc-class server () ())
 
@@ -37,7 +11,36 @@
                             :host "127.0.0.1"
                             :port 9555
                             :tag :server))
+
 (start-rpc-server my-tps my-server)
+
+
+;;;;;;;;
+(defmacro make-server ()
+  (let ((class-name (gensym)))
+    `(progn
+       (defclass ,class-name () ())
+       (make-instance 'transport-udp-server
+                      :tag :server
+                      :class-def ,class-name))))
+
+(defmacro expose (server rpc-method-name lambda-fun-form)
+  `(defmethod (string-to-symbol ,rpc-method-name) ((self ,(class-def server)) ,@(second lambda-fun-form))
+     ,@(third lambda-fun-form)))
+
+(defun)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; server
+(defvar *server* (jsonrpc:make-server))
+(jsonrpc:expose *server* "sum" (lambda (args) (reduce #'+ args)))
+
+(jsonrpc:server-listen *server* :port 50879 :mode :tcp)
+
+
+
 
 
 ;; client
@@ -50,6 +53,26 @@
 (setf temp (call my-stub 'my-sum 4 3))
 
 (funcall temp)
+
+
+
+
+
+
+
+
+;; client
+(defvar *client* (jsonrpc:make-client))
+(jsonrpc:client-connect *client* :url "http://127.0.0.1:50879" :mode :tcp)
+(jsonrpc:call *client* "sum" '(10 20))
+                                        ;=> 30
+
+;; Calling with :timeout option
+(jsonrpc:call *client* "sum" '(10 20) :timeout 1.0)
+                                        ;=> 30
+
+
+
 
 
 
